@@ -1,0 +1,48 @@
+{
+  "summary": "Iteration-2 regression + new-feature backend tests (/app/backend/tests/test_openalz_v2.py) plus full frontend testid/branding/mobile verification against the preview URL. 8/9 executed backend tests PASSED (health, models, settings validation incl. 422 for unknown model ids, goals CRUD + pursue PROPOSED->ACTIVE with goal_id in launched run, run POST+cancel + 409 on terminal, runs?status=completed, bias detect (full cycle ~37s, overall_score + categories present, <20 chars -> 422), agent drug_screener reflect (completed with duplicate -> 409)). test_self_correction returned SKIP because the shared Emergent LLM key BUDGET WAS EXCEEDED mid-run ('litellm.RateLimitError: Budget has been exceeded! Current cost: 1.019187, Max budget: 1.0'). The remaining LLM-heavy tests (debate full-cycle, chat SSE streaming/multiturn/PII, daily-scan self-set-goal) were therefore NOT executed because no LLM capacity remains. The server endpoints themselves accept requests correctly (POST /debates, /chat/*, /orchestrator/daily-scan all return 200), only the downstream LLM calls will immediately fail with the budget error. Frontend: all 12 sidebar nav testids, all page-specific testids, chat-starter-*, goals-tab-*, agent-detail-sheet + agent-reflect-btn, mobile-topbar/drawer, site-menu-btn/mobile-menu, hero/terminal/funnel/insights/receipts/doc testids are present and interactive. Branding scan via document.body.innerText across 12 routes found ZERO occurrences of 'AlzNexus','Claude','GPT','Gemini','AD Workbench','GitHub'. Tab titles all end with 'OpenAlz' (e.g. '/doc' = 'Documentation & Research Library · OpenAlz'). favicon.svg=200, manifest.json=200. No horizontal overflow on landing or /app at 390px. Research library link navigates to /doc/research/:id and renders [data-testid=report-title].",
+  "backend_issues": {
+    "critical": [
+      {"endpoint": "ENV / Emergent LLM key", "issue": "Budget exceeded (cost 1.019187 > 1.0). Any new LLM-dependent work (self_correction, debate, chat, daily_scan reasoning, run step execution) will fail with litellm RateLimitError. Needs budget reset / new key before further end-to-end testing is possible.", "priority": "CRITICAL"}
+    ],
+    "minor": [
+      {"endpoint": "@app.on_event startup/shutdown", "issue": "FastAPI deprecated event hooks; migrate to lifespan context manager."},
+      {"endpoint": "GET /api/stats", "issue": "avg_novelty / avg_confidence lambda recomputed inline, uses `isoformat` string compare for `last_self_correction_at` in after_run (works but fragile)."},
+      {"endpoint": "GET /api/goals", "issue": "N+1-style per-goal count + nested async comprehension for insights could get expensive as goals grow; consider a single aggregation."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [
+      {"flow": "Chat / Debate / Self-correction / Daily-scan reasoning", "issue": "Will error-out at the LLM call because the Emergent LLM budget is exhausted; UI likely shows failed state or no stream. Not a frontend bug but will manifest as broken flows for the user.", "affected_selectors": ["chat-send-btn","debate-start-btn","self-correction-btn","daily-scan-btn"]}
+    ],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_openalz_v2.py",
+    "/app/backend/tests/test_alznexus.py",
+    "/app/test_reports/pytest/pytest_v2_fast.xml"
+  ],
+  "action_items": [
+    "URGENT: Rotate / top-up the Emergent LLM key — budget currently exceeded. Without it, debate, chat, daily-scan, self-correction, and new research runs cannot complete.",
+    "After key fix, re-run: pytest /app/backend/tests/test_openalz_v2.py::test_self_correction, ::test_debate_full_cycle, ::test_chat_streaming_pii_and_multiturn, ::test_daily_scan_sets_self_goal (each must be run with -n 0 and sequentially — LLM concurrency is 1).",
+    "Optional: migrate startup/shutdown to FastAPI lifespan; add aggregation for /api/goals counts."
+  ],
+  "critical_code_review_comments": [
+    "server.py: on_event startup/shutdown deprecated — move to lifespan.",
+    "server.py: list_goals performs 1 + N count_documents calls and nested async iteration for insights count; replace with $lookup aggregation.",
+    "server.py: in after_run the OR precedence `notify_on_accept and verdict==accept or novelty>=X and verdict!=reject` is error-prone; wrap each side in parentheses for clarity.",
+    "cron_tick persists cron_runs forever — needs TTL index on received_at (also noted in iteration_1).",
+    "chat SSE: on client disconnect the finally block relies on asyncio.shield for the DB update, but the LIMITER.release() path on BaseException re-raises — verify no leaked permits when a client cancels mid-stream.",
+    "spawn_run / launch builds docs with .model_dump copies but original mutable dicts stored in RUN_TASKS — fine, just worth a comment."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_openalz_v2.py"
+  ],
+  "success_rate": {"backend": "8/9 executed passed (89%); 3 slow LLM tests not executable due to budget exhaustion", "frontend": "100% of required testids/branding/mobile checks passed"},
+  "test_credentials": "No user auth. Cron secret in /app/backend/.env (WEBHOOK_CRON_SECRET).",
+  "seed_data_creation": "Created & deleted: 1 TEST_ goal (via test_goals_crud_and_pursue, deleted at end). Launched & cancelled: 1 TEST_ manual run and 1 pursue-triggered run. One bias report + one drug_screener reflection + one self-correction (failed) left in DB — safe to keep; they are harmless history records.",
+  "retest_needed": true,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "LLM budget was exceeded during this iteration. Fast tests in /app/backend/tests/test_openalz_v2.py (test_health, test_models, test_settings_rw, test_goals_crud_and_pursue, test_run_cancel_and_409, test_runs_filter_completed, test_bias_detect, test_agent_reflection) all pass. After budget restoration, run the 4 remaining tests individually with `pytest -n 0` because LLM concurrency is 1 and parallel will cause queueing timeouts. Frontend has nothing outstanding. Note pytest.ini forces `-n 2 --dist loadscope`; use `-n 0` to serialize when invoking LLM tests.",
+  "rca of the issue": "Self-correction (and transitively debate/chat/daily-scan) failed solely because the shared Emergent LLM key hit its monetary budget cap (cost 1.019187 > max 1.0) returning OpenAIException RateLimitError from litellm. Reproduction: POST /api/orchestrator/self-correction -> GET /api/orchestrator/self-corrections shows status=failed error containing 'Budget has been exceeded'. Mitigation: increase budget or rotate EMERGENT_LLM_KEY, then re-run the LLM-dependent tests. No application-code fix required."
+}

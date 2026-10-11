@@ -74,7 +74,7 @@ async def after_run(run_id: str):
         return
     s = await get_settings()
     async for i in db.insights.find({"run_id": run_id}, P):
-        if s["notify_on_accept"] and i.get("verdict") == "accept" or i.get("novelty", 0) >= s["insight_alert_novelty"] and i.get("verdict") != "reject":
+        if (s["notify_on_accept"] and i.get("verdict") == "accept") or (i.get("novelty", 0) >= s["insight_alert_novelty"] and i.get("verdict") != "reject"):
             await db.notifications.insert_one({"id": str(uuid.uuid4()), "kind": "insight", "title": i["title"], "insight_id": i["id"], "run_id": run_id,
                                                "body": f"{i.get('verdict', '').upper()} · novelty {i.get('novelty')} · confidence {i.get('confidence')}",
                                                "read": False, "created_at": agents.now()})
@@ -634,7 +634,8 @@ async def chat_message(sid: str, body: ChatMsgIn):
         except Exception as e:
             status = "failed"
             logger.exception("chat failed")
-            yield sse({"type": "error", "message": str(e)[:300]})
+            msg = "The AI budget for this workspace is used up — please top up the Universal Key balance." if "budget" in str(e).lower() else str(e)[:300]
+            yield sse({"type": "error", "message": msg})
         finally:
             await asyncio.shield(db.chat_messages.update_one({"id": amsg["id"]}, {"$set": {"content": out, "status": status if out or status == "failed" else "failed"}}))
         yield sse({"type": "done", "status": status})

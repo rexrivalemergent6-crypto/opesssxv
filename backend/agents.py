@@ -82,6 +82,8 @@ AGENT_NOTES: dict = {}  # agent key -> list of self-reflection adjustments
 
 def is_rate_limit(e: Exception) -> bool:
     m = str(e)
+    if "budget" in m.lower():
+        return False  # out of credits: retrying will not help
     return "429" in m or "RateLimit" in m or "concurrent" in m.lower()
 
 

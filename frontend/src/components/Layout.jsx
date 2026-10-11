@@ -28,14 +28,15 @@ export const NAV_GROUPS = [
   ] },
 ];
 
+export const NeuronMark = ({ className = "" }) => (
+  <span aria-hidden="true" className={`inline-block ${className}`}
+    style={{ WebkitMaskImage: "url(/logo-mark.png)", maskImage: "url(/logo-mark.png)", WebkitMaskSize: "contain", maskSize: "contain", WebkitMaskRepeat: "no-repeat", maskRepeat: "no-repeat", WebkitMaskPosition: "center", maskPosition: "center" }} />
+);
+
 export const Logo = ({ className = "" }) => (
   <Link to="/" className={`flex items-center gap-2.5 ${className}`} data-testid="logo-link">
-    <span className="relative w-8 h-8 rounded-lg bg-primary/10 grid place-items-center">
-      <svg viewBox="0 0 32 32" className="w-5 h-5 text-primary" fill="none" stroke="currentColor" strokeWidth="1.8">
-        <circle cx="16" cy="16" r="3.2" fill="currentColor" />
-        <circle cx="6" cy="8" r="2" /><circle cx="26" cy="8" r="2" /><circle cx="6" cy="24" r="2" /><circle cx="26" cy="24" r="2" />
-        <path d="M8 9.5 13.5 14M24 9.5 18.5 14M8 22.5l5.5-4.5M24 22.5 18.5 18" />
-      </svg>
+    <span className="w-8 h-8 rounded-lg bg-primary grid place-items-center shadow-sm shadow-primary/30">
+      <NeuronMark className="w-[22px] h-[22px] bg-white" />
     </span>
     <span className="font-display text-xl font-medium tracking-tight">Open<span className="text-primary">Alz</span></span>
   </Link>

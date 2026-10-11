@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Link, NavLink } from "react-router-dom";
 import { motion, useInView, animate } from "framer-motion";
 import { List, X, ArrowRight } from "@phosphor-icons/react";
-import { Logo } from "@/components/Layout";
+import { Logo, NeuronMark } from "@/components/Layout";
 
 
 /* Drifting "cells" with synaptic links — the animated background. */
@@ -78,9 +78,9 @@ export const Gate = () => {
         <div className="relative w-28 h-28 mx-auto">
           <span className="absolute inset-0 rounded-full border border-primary/30 animate-ping" />
           <span className="absolute inset-3 rounded-full border border-primary/40 spin-slow" style={{ borderStyle: "dashed" }} />
-          <span className="absolute inset-[42%] rounded-full bg-primary" />
+          <NeuronMark className="absolute inset-[22%] bg-primary" />
         </div>
-        <p className="font-display text-3xl mt-6">OpenAlz</p>
+        <p className="font-display text-3xl mt-6">Open<span className="text-primary">Alz</span></p>
         <p className="font-mono text-xs text-muted-foreground mt-2">{msg}<span className="caret" /></p>
       </div>
     </motion.div>

@@ -6,6 +6,7 @@ import { ArrowRight, BookOpenText, ShieldCheck, Fingerprint, LockKey, Scales, Ar
 import { api, AGENT_META, fmtDate, fmtRel } from "@/lib/api";
 import { CellsCanvas, Gate, Reveal, CountUp, SiteNav, SiteFooter, SecHead, fingerprint, asciiBar } from "@/components/Site";
 import { EXAMPLES } from "@/components/NewRunForm";
+import { NeuronMark } from "@/components/Layout";
 
 const NEURON = "https://images.unsplash.com/photo-1716833322990-acbeae5cc3eb?crop=entropy&cs=srgb&fm=jpg&q=80&w=1000";
 const NEURON2 = "https://images.unsplash.com/photo-1748520109126-9e1ada959feb?crop=entropy&cs=srgb&fm=jpg&q=80&w=1000";
@@ -69,7 +70,7 @@ const Orbit = () => {
       <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 text-center">
         <div className="relative w-16 h-16 sm:w-20 sm:h-20 rounded-full bg-primary grid place-items-center shadow-xl shadow-primary/30">
           <span className="absolute inset-0 rounded-full bg-primary/40 animate-ping" />
-          <span className="relative font-display text-white text-lg sm:text-xl">Ω</span>
+          <NeuronMark className="relative w-10 h-10 sm:w-12 sm:h-12 bg-white spin-slow" />
         </div>
         <div className="font-mono text-[10px] text-muted-foreground mt-2">orchestrator</div>
       </div>

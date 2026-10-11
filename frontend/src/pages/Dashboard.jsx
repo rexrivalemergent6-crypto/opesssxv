@@ -33,7 +33,7 @@ export default function Dashboard() {
           </div>
         </div>
       </div>
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+      <div data-testid="stats" className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
         <Stat label="Runs completed" value={s ? `${s.runs_completed}/${s.runs_total}` : "—"} testid="stat-runs" />
         <Stat label="Active runs" value={s?.runs_active ?? "—"} testid="stat-active" accent="text-primary" />
         <Stat label="Insights (accepted)" value={s ? `${s.insights_total} (${s.insights_accepted})` : "—"} testid="stat-insights" />

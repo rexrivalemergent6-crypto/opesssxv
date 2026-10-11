@@ -182,8 +182,12 @@ async def run_due_schedules():
     async for s in db.schedules.find({"enabled": True}, P):
         last = s.get("last_run_at")
         if last is None or now - datetime.fromisoformat(last) >= timedelta(hours=s["interval_hours"]):
-            await db.schedules.update_one({"id": s["id"]}, {"$set": {"last_run_at": now.isoformat()}, "$inc": {"runs_triggered": 1}})
-            await launch(s["goal"], "schedule", s["id"])
+            # atomic claim: only launch if last_run_at is unchanged (prevents double-trigger)
+            claimed = await db.schedules.find_one_and_update(
+                {"id": s["id"], "last_run_at": last},
+                {"$set": {"last_run_at": now.isoformat()}, "$inc": {"runs_triggered": 1}})
+            if claimed:
+                await launch(s["goal"], "schedule", s["id"])
 
 
 @api.post("/cron/tick")

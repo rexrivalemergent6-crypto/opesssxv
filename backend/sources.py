@@ -18,11 +18,11 @@ async def _ncbi(c, path, params):
         return r
 
 
-async def pubmed_search(query: str, n: int = 8, alzheimer: bool = True):
+async def pubmed_search(query: str, n: int = 8, alzheimer: bool = True, reldate: int = 1825, sort: str = "relevance"):
     term = f"({query}) AND alzheimer" if alzheimer else query
     async with httpx.AsyncClient(timeout=40) as c:
         r = await _ncbi(c, "esearch.fcgi", {"db": "pubmed", "term": term, "retmax": n, "retmode": "json",
-                                            "sort": "relevance", "datetype": "pdat", "reldate": 1825})
+                                            "sort": sort, "datetype": "pdat", "reldate": reldate})
         ids = r.json()["esearchresult"]["idlist"]
         if not ids:
             return []

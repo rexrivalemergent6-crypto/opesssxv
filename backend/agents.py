@@ -1,4 +1,5 @@
 import asyncio
+import heapq
 import json
 import os
 import re
@@ -13,20 +14,20 @@ import sources
 MODEL = ("anthropic", "claude-sonnet-4-5-20250929")
 
 AGENTS = [
-    {"key": "orchestrator", "name": "Master Orchestrator", "role": "Daily scan planning, sub-agent coordination, debate resolution and self-correction.", "source": "Claude Sonnet 4.5"},
+    {"key": "orchestrator", "name": "Master Orchestrator", "role": "Daily scan planning, sub-agent coordination, debate resolution and self-correction.", "source": "OpenAlz reasoning engine"},
     {"key": "literature_bridger", "name": "Literature Bridger", "role": "Bridges Alzheimer's literature with adjacent fields to surface hidden connections.", "source": "PubMed E-utilities (NCBI)"},
     {"key": "biomarker_hunter", "name": "Biomarker Hunter", "role": "Identifies candidate fluid, imaging and molecular biomarkers.", "source": "PubMed + Open Targets"},
     {"key": "drug_screener", "name": "Drug Screener", "role": "Screens clinical-stage and repurposable compounds against AD targets.", "source": "ChEMBL + Open Targets"},
     {"key": "trial_optimizer", "name": "Trial Optimizer", "role": "Optimises trial design: endpoints, cohorts, failure patterns.", "source": "ClinicalTrials.gov API v2"},
     {"key": "pathway_modeler", "name": "Pathway Modeler", "role": "Models enriched biological pathways over the evidence gene set.", "source": "Reactome Analysis Service"},
     {"key": "data_harmonizer", "name": "Data Harmonizer", "role": "Harmonises heterogeneous source data into a unified evidence graph.", "source": "All live sources"},
-    {"key": "hypothesis_validator", "name": "Hypothesis Validator", "role": "Verifies citations against registries and adversarially debates hypotheses.", "source": "PubMed + ClinicalTrials.gov + Claude"},
+    {"key": "hypothesis_validator", "name": "Hypothesis Validator", "role": "Verifies citations against registries and adversarially debates hypotheses.", "source": "PubMed + ClinicalTrials.gov + OpenAlz engine"},
     {"key": "collaboration_matchmaker", "name": "Collaboration Matchmaker", "role": "Matches insights to active researchers and institutions.", "source": "PubMed author records"},
-    {"key": "bias_detection", "name": "Bias Detection Service", "role": "Detects demographic, cohort, publication and confirmation bias; proposes corrections.", "source": "Claude Sonnet 4.5"},
+    {"key": "bias_detection", "name": "Bias Detection Service", "role": "Detects demographic, cohort, publication and confirmation bias; proposes corrections.", "source": "OpenAlz reasoning engine"},
 ]
 
 SYSTEMS = {
-    "orchestrator": "You are the Master Orchestrator of AlzNexus, an autonomous Alzheimer's disease research foundry. You plan, coordinate, resolve debates and self-correct. Output strict JSON only.",
+    "orchestrator": "You are the Master Orchestrator of OpenAlz, an autonomous Alzheimer's disease research foundry. You plan, coordinate, resolve debates and self-correct. Output strict JSON only.",
     "literature_bridger": "You are the Literature Bridger agent. Find non-obvious mechanistic bridges between Alzheimer's research and an adjacent field, citing PMIDs. Output strict JSON only.",
     "biomarker_hunter": "You are the Biomarker Hunter agent. Identify candidate biomarkers with evidence strength, citing PMIDs and targets. Output strict JSON only.",
     "drug_screener": "You are the Drug Screener agent. Screen compounds for AD relevance and repurposing potential using target-association evidence. Output strict JSON only.",
@@ -43,11 +44,56 @@ def now():
     return datetime.now(timezone.utc).isoformat()
 
 
-_LLM_SEM = asyncio.Semaphore(int(os.environ.get("LLM_CONCURRENCY", "1")))
+class PriorityLimiter:
+    """Concurrency limiter where lower priority numbers are served first (interactive > background)."""
+
+    def __init__(self, n: int):
+        self.n, self.active, self.waiters, self.seq = n, 0, [], 0
+
+    async def acquire(self, prio: int = 5):
+        if self.active < self.n and not self.waiters:
+            self.active += 1
+            return
+        fut = asyncio.get_event_loop().create_future()
+        self.seq += 1
+        heapq.heappush(self.waiters, (prio, self.seq, fut))
+        try:
+            await fut
+        except asyncio.CancelledError:
+            if fut.done() and not fut.cancelled():
+                self.release()
+            raise
+
+    def release(self):
+        self.active -= 1
+        while self.waiters and self.active < self.n:
+            _, _, f = heapq.heappop(self.waiters)
+            if not f.done():
+                self.active += 1
+                f.set_result(True)
+
+    def busy(self):
+        return {"active": self.active, "queued": len(self.waiters), "limit": self.n}
 
 
-async def _llm_once(agent: str, sys: str, prompt: str) -> str:
-    chat = LlmChat(api_key=os.environ["EMERGENT_LLM_KEY"], session_id=f"{agent}-{uuid.uuid4()}", system_message=sys).with_model(*MODEL)
+LIMITER = PriorityLimiter(int(os.environ.get("LLM_CONCURRENCY", "1")))
+AGENT_NOTES: dict = {}  # agent key -> list of self-reflection adjustments
+
+
+def is_rate_limit(e: Exception) -> bool:
+    m = str(e)
+    return "429" in m or "RateLimit" in m or "concurrent" in m.lower()
+
+
+def make_chat(session: str, system: str, model=None, history=None) -> LlmChat:
+    prov, name = model or MODEL
+    msgs = [{"role": "system", "content": system}] + (history or []) if history else None
+    return LlmChat(api_key=os.environ["EMERGENT_LLM_KEY"], session_id=session, system_message=system,
+                   initial_messages=msgs).with_model(prov, name)
+
+
+async def _llm_once(agent: str, sys: str, prompt: str, model=None) -> str:
+    chat = make_chat(f"{agent}-{uuid.uuid4()}", sys, model)
     out = ""
     async for ev in chat.stream_message(UserMessage(text=prompt)):
         if isinstance(ev, TextDelta):
@@ -57,24 +103,40 @@ async def _llm_once(agent: str, sys: str, prompt: str) -> str:
     return out
 
 
-async def llm(agent: str, prompt: str, memory: list) -> dict:
-    sys = SYSTEMS[agent]
-    if memory:
-        sys += "\n\nStrategy memory learned from previous runs (apply it):\n- " + "\n- ".join(memory)
-    out, attempts = "", 5
-    for i in range(attempts):
+async def llm_text(agent: str, sys: str, prompt: str, prio: int = 5, model=None) -> str:
+    for i in range(5):
+        await LIMITER.acquire(prio)
         try:
-            async with _LLM_SEM:
-                out = await _llm_once(agent, sys, prompt)
-            break
+            return await _llm_once(agent, sys, prompt, model)
         except Exception as e:
-            msg = str(e)
-            if i < attempts - 1 and ("429" in msg or "RateLimit" in msg or "concurrent" in msg.lower()):
+            if i < 4 and is_rate_limit(e):
                 await asyncio.sleep(3 * (i + 1))
                 continue
             raise
+        finally:
+            LIMITER.release()
+
+
+def parse_json(out: str) -> dict:
     m = re.search(r"\{.*\}", out, re.S)
-    return json.loads(m.group(0)) if m else {"raw": out}
+    if not m:
+        return {"raw": out}
+    try:
+        return json.loads(m.group(0))
+    except json.JSONDecodeError:
+        return {"raw": out}
+
+
+async def llm(agent: str, prompt: str, memory: list, prio: int = 5) -> dict:
+    sys = SYSTEMS[agent]
+    if memory:
+        sys += "\n\nStrategy memory learned from previous runs (apply it):\n- " + "\n- ".join(memory)
+    if AGENT_NOTES.get(agent):
+        sys += "\n\nYour own self-reflection adjustments (apply them):\n- " + "\n- ".join(AGENT_NOTES[agent])
+    out = await llm_text(agent, sys, prompt, prio)
+    return parse_json(out)
+
+
 
 
 def slim(papers):
@@ -107,10 +169,18 @@ class Run:
         return out if status == "done" else {}
 
 
+async def load_agent_notes(db):
+    AGENT_NOTES.clear()
+    async for r in db.reflections.find({"status": "completed"}, {"_id": 0}).sort("created_at", -1).limit(50):
+        if r["agent"] not in AGENT_NOTES:
+            AGENT_NOTES[r["agent"]] = (r.get("result") or {}).get("adjustments", [])[:4]
+
+
 async def execute_run(db, run_id: str, goal: str):
     run = Run(db, run_id)
     await db.runs.update_one({"id": run_id}, {"$set": {"status": "running", "started_at": now()}})
     try:
+        await load_agent_notes(db)
         memory = [m["lesson"] async for m in db.learnings.find({}, {"_id": 0}).sort("created_at", -1).limit(12)]
         prior = [i["title"] async for i in db.insights.find({}, {"_id": 0, "title": 1}).sort("created_at", -1).limit(30)]
 
@@ -266,6 +336,12 @@ Return JSON: {{"lessons": [str, str, str]}} — short, actionable, reusable stra
         await db.runs.update_one({"id": run_id}, {"$set": {"status": "completed", "finished_at": now(), "plan": plan,
                                                            "insight_ids": insight_ids, "bias_risk": bias.get("overall_risk")}})
         await run.audit("orchestrator", "Run completed", {"insights": len(insight_ids)})
+    except asyncio.CancelledError:
+        await db.runs.update_one({"id": run_id}, {"$set": {"status": "cancelled", "error": "Cancelled by researcher", "finished_at": now(),
+                                                           "steps.$[s].status": "cancelled", "steps.$[s].finished_at": now()}},
+                                 array_filters=[{"s.status": "running"}])
+        await run.audit("orchestrator", "Run cancelled", {})
+        raise
     except Exception as e:
         await db.runs.update_one({"id": run_id}, {"$set": {"status": "failed", "error": str(e), "finished_at": now()}})
         await run.audit("orchestrator", "Run failed", {"error": str(e)})

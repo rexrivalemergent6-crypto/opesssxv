@@ -43,10 +43,10 @@ def now():
     return datetime.now(timezone.utc).isoformat()
 
 
-async def llm(agent: str, prompt: str, memory: list) -> dict:
-    sys = SYSTEMS[agent]
-    if memory:
-        sys += "\n\nStrategy memory learned from previous runs (apply it):\n- " + "\n- ".join(memory)
+_LLM_SEM = asyncio.Semaphore(int(os.environ.get("LLM_CONCURRENCY", "1")))
+
+
+async def _llm_once(agent: str, sys: str, prompt: str) -> str:
     chat = LlmChat(api_key=os.environ["EMERGENT_LLM_KEY"], session_id=f"{agent}-{uuid.uuid4()}", system_message=sys).with_model(*MODEL)
     out = ""
     async for ev in chat.stream_message(UserMessage(text=prompt)):
@@ -54,6 +54,25 @@ async def llm(agent: str, prompt: str, memory: list) -> dict:
             out += ev.content
         elif isinstance(ev, StreamDone):
             break
+    return out
+
+
+async def llm(agent: str, prompt: str, memory: list) -> dict:
+    sys = SYSTEMS[agent]
+    if memory:
+        sys += "\n\nStrategy memory learned from previous runs (apply it):\n- " + "\n- ".join(memory)
+    out, attempts = "", 5
+    for i in range(attempts):
+        try:
+            async with _LLM_SEM:
+                out = await _llm_once(agent, sys, prompt)
+            break
+        except Exception as e:
+            msg = str(e)
+            if i < attempts - 1 and ("429" in msg or "RateLimit" in msg or "concurrent" in msg.lower()):
+                await asyncio.sleep(3 * (i + 1))
+                continue
+            raise
     m = re.search(r"\{.*\}", out, re.S)
     return json.loads(m.group(0)) if m else {"raw": out}
 
